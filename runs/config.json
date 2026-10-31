@@ -1,0 +1,18 @@
+{
+  "command": "train",
+  "manifest": "demo_data/manifest.csv",
+  "image": null,
+  "checkpoint": "runs/best.pt",
+  "output": "runs",
+  "classes": [
+    "compact",
+    "extended",
+    "multi_component"
+  ],
+  "size": 64,
+  "epochs": 12,
+  "batch_size": 16,
+  "lr": 0.001,
+  "seed": 42,
+  "device": "cpu"
+}

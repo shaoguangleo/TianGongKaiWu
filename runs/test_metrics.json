@@ -1,0 +1,47 @@
+{
+  "accuracy": 1.0,
+  "macro_f1": 1.0,
+  "precision": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "recall": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "f1": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "support": [
+    10,
+    10,
+    10
+  ],
+  "confusion_matrix": [
+    [
+      10,
+      0,
+      0
+    ],
+    [
+      0,
+      10,
+      0
+    ],
+    [
+      0,
+      0,
+      10
+    ]
+  ],
+  "loss": 1.010330899556478,
+  "classes": [
+    "compact",
+    "extended",
+    "multi_component"
+  ]
+}

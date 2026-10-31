@@ -1,0 +1,9 @@
+{
+  "image": "/workspace/scratch/ea0a0cdf2923/racs_starter/demo_data/test_0_0.fits",
+  "probabilities": {
+    "compact": 0.35631266236305237,
+    "extended": 0.2993924617767334,
+    "multi_component": 0.34429478645324707
+  },
+  "note": "未校准的模型输出，不是科学可靠度"
+}

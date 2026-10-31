@@ -23,7 +23,8 @@ def preprocess(image):
     valid = np.isfinite(image)
     if not valid.any():
         raise ValueError('图像没有有效像素')
-    values = image[valid]
+    # float32 极值的中位数/方差归约可能溢出；用 float64 统计，再输出 float32。
+    values = image[valid].astype(np.float64)
     background = np.median(values)
     # 第3段：MAD估计稳健尺度，退化时用标准差；常数图用1作为安全尺度。
     # 这是切片级工程归一化，不是专业局部RMS测量，也不保留绝对流量。

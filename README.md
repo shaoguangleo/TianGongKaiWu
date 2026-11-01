@@ -7,11 +7,13 @@
 
 ## 1. 安装与快速运行
 
-先使用 Python 3.10—3.12 新建虚拟环境，在仓库根目录安装；实际验证的平台和版本以 [安装说明](docs/installation.md) 与 [打包验证](docs/package-verification.md) 为准。模型默认使用 CPU。
+先使用 **Python 3.10—3.12**（须 ≥3.10，且 <3.13）新建虚拟环境，在仓库根目录安装；勿用系统默认的 `python`/`python3`（可能是 3.9 或更新不支持的版本）。实际验证的平台和版本以 [安装说明](docs/installation.md) 与 [打包验证](docs/package-verification.md) 为准。模型默认使用 CPU。
 
 ```bash
-python -m venv .venv
+# 显式指定解释器：python3.10 / python3.11 / python3.12 均可
+python3.10 -m venv .venv
 source .venv/bin/activate
+python -c "import sys; assert sys.version_info >= (3, 10) and sys.version_info < (3, 13), sys.version"
 python -m pip install -e ".[dev]"
 python demo.py --output demo_data --per-class 40
 python main.py train --manifest demo_data/manifest.csv --epochs 12 --output runs
@@ -21,6 +23,8 @@ python -m pytest -q
 ```
 
 安装后可在仓库外使用 `tiangong-classify`、`tiangong-detect`、`tiangong-demo` 和 `tiangong-demo-detection`，其参数与对应旧脚本一致。构建和从 wheel/sdist 安装的命令见 [安装说明](docs/installation.md)。
+
+步骤03新增 `tiangong-bundle`：分类与检测权重可以迁移为绑定架构、类别、预处理和来源的统一 `.tgb`。使用方法见 [模型包说明](docs/bundle.md)，TDD及安装验证见 [本步验证](docs/bundle-verification.md)。已核对 [HeTu输入与标注差异](docs/hetu-reference.md)；用户提供的约5000张标注图尚待定位和格式审计。
 
 代码接受 `--device cuda`，但 CUDA 尚未完成实际平台验证。默认 CPU，训练不下载权重。依赖范围不是跨平台锁文件；早期分类记录保留在 `VERIFICATION.md`，本轮包验证单独记录。
 生成器对已有manifest拒绝覆盖。不要使用相同output目录混合不同真实实验；每次运行用新目录。
@@ -60,8 +64,8 @@ python -m pytest -q
 3. `predict`复用同一预处理，将单图概率写入JSON。
 4. 检查全清单后选择split，保证不会只检查局部而漏掉组跨分区。
 5. `train`运行train/val，按验证集macro-F1保存最佳权重。若并列保留较早模型；test不参与选优。
-6. checkpoint记录权重、类别、尺寸、随机种子、epoch、CSV的SHA256；另存config和history。
-7. `evaluate`只读取test并保存指标、混淆矩阵和逐样本结果。
+6. checkpoint记录权重、类别、尺寸、随机种子、epoch、CSV的SHA256及task/schema/architecture/预处理版本；原子保存最佳权重，训练拒绝非空输出目录。
+7. `evaluate`先核对冻结CSV摘要，再读取test并保存指标、混淆矩阵和逐样本结果。结果拒绝覆盖；旧分类文件需要显式确认预处理版本，见模型包说明。
 
 只加载可信checkpoint。CSV摘要不等于图像字节版本管理；正式研发需额外保存图像校验和、代码提交与环境版本。
 

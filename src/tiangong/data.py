@@ -1,5 +1,7 @@
 """数据层：保持原FITS不变，将科学数据转换为训练张量。"""
 import csv
+import hashlib
+import io
 from pathlib import Path
 import numpy as np
 from astropy.io import fits
@@ -38,10 +40,14 @@ def preprocess(image):
     return np.stack([signal, valid.astype(np.float32)])
 
 
-def read_manifest(path, num_classes):
+def read_manifest(path, num_classes, *, expected_sha256=None):
     # 第4段：CSV是样本的唯一入口；路径相对CSV，而不是当前工作目录。
     path = Path(path).resolve()
-    with path.open(newline='', encoding='utf-8-sig') as f:
+    # 从同一批bytes核对冻结摘要并解析，避免检查后再次读盘引入不同清单。
+    content = path.read_bytes()
+    if expected_sha256 is not None and hashlib.sha256(content).hexdigest() != expected_sha256:
+        raise ValueError('manifest SHA256与冻结benchmark不一致，禁止更改样本或split')
+    with io.StringIO(content.decode('utf-8-sig'), newline='') as f:
         reader = csv.DictReader(f)
         required = {'sample_id','path','label','split','group_id'}
         if not required.issubset(reader.fieldnames or []):

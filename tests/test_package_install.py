@@ -101,5 +101,6 @@ def test_wheel_and_sdist_run_in_clean_environments(tmp_path):
         reports[kind] = json.loads(output)
         assert reports[kind]["classification_shape"] == [1, 3]
         assert reports[kind]["detection_shape"] == [1, 3, 4]
+        assert set(reports[kind]["bundle_workflows"]) == {"classification", "detection"}
         _run([python, "-I", "-m", "pip", "freeze"], outside, tmp_path / f"{kind}-freeze.txt")
     (tmp_path / "installation-report.json").write_text(json.dumps(reports, indent=2), encoding="utf-8")

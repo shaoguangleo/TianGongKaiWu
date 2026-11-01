@@ -12,12 +12,16 @@ import astropy
 from astropy.io import fits
 import numpy as np
 import scipy
+import safetensors
 import torch
 
 import tiangong
 from tiangong.data import preprocess, read_image
 from tiangong.model import MorphologyCNN
 from tiangong.detection_model import TinySetDetector
+from tiangong.bundle import load_bundle
+from tiangong.classification_checkpoint import load_classification_checkpoint
+from tiangong.detect import load_detection_checkpoint
 
 
 def run_cli(name, *arguments):
@@ -32,7 +36,7 @@ def run_cli(name, *arguments):
 def main():
     assert sys.prefix != sys.base_prefix
     prefix = Path(sys.prefix).resolve()
-    for module in (tiangong, torch, np, scipy, astropy):
+    for module in (tiangong, torch, np, scipy, astropy, safetensors):
         assert Path(module.__file__).resolve().is_relative_to(prefix), module.__file__
     torch.set_num_threads(2)
     torch.manual_seed(7)
@@ -62,7 +66,7 @@ def main():
     else:
         raise AssertionError("打包后不应静默选择科学立方体的频率平面")
 
-    # 四个安装入口均执行真实行为，检查遗漏导入、入口错绑和相对路径问题。
+    # 所有安装入口均执行真实行为，检查遗漏导入、入口错绑和相对路径问题。
     run_cli("tiangong-demo", "--output", "classification-data", "--per-class", 2)
     run_cli("tiangong-classify", "train", "--manifest", "classification-data/manifest.csv",
             "--epochs", 1, "--batch-size", 3, "--output", "classification-run")
@@ -81,6 +85,38 @@ def main():
     run_cli("tiangong-detect", "predict", "--image", "input.fits",
             "--checkpoint", "detection-run/best.pt", "--output", "detection-predict")
     assert Path("detection-predict/prediction.json").is_file()
+    bundle_reports = {}
+    for name, task, image_path, loader, model in (
+        ("classification", "morphology_classification", "classification-data/test_0_0.fits",
+         load_classification_checkpoint, MorphologyCNN(3)),
+        ("detection", "component_detection", "input.fits", load_detection_checkpoint,
+         TinySetDetector(1, num_queries=3, hidden_dim=16)),
+    ):
+        checkpoint = Path(f"{name}-run/best.pt")
+        output = Path(f"{name}-engineering-demo.tgb")
+        state = loader(checkpoint)
+        model.load_state_dict(state["model"], strict=True)
+        model.eval()
+        run_cli("tiangong-bundle", "migrate", "--checkpoint", checkpoint, "--output", output,
+                "--task", task, "--trust-checkpoint", "--source-description", "Synthetic FITS installation smoke; not scientific weights")
+        inspected = json.loads(run_cli("tiangong-bundle", "inspect", "--bundle", output).stdout)
+        assert inspected["config"]["release_level"] == "engineering-demo"
+        # 恢复推理仅依赖bundle与新输入；原checkpoint和训练manifest不再可用。
+        checkpoint.rename(checkpoint.with_suffix(".hidden"))
+        manifest = next(Path(f"{name}-data").glob("manifest.*"))
+        manifest.rename(manifest.with_suffix(".hidden"))
+        bundle = load_bundle(output, expected_task=task, expected_classes=state["classes"])
+        tensor = bundle.prepare_image(image_path)
+        with torch.no_grad():
+            expected, actual = model(tensor), bundle.model(tensor)
+        if isinstance(expected, dict):
+            for key in expected:
+                torch.testing.assert_close(actual[key], expected[key], rtol=0, atol=0)
+        else:
+            torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+        bundle_reports[name] = {"task": task, "classes": list(bundle.classes),
+                                "sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
+                                "checkpoint_manifest_required": False, "prediction_exact": True}
     print(json.dumps({
         "python": platform.python_version(), "platform": platform.platform(),
         "machine": platform.machine(), "prefix": sys.prefix,
@@ -88,8 +124,9 @@ def main():
         "classification_shape": list(classes.shape),
         "detection_shape": list(detection["boxes"].shape),
         "versions": {name: importlib.metadata.version(name) for name in
-                     ("tiangongkaiwu", "torch", "numpy", "scipy", "astropy")},
+                     ("tiangongkaiwu", "torch", "numpy", "scipy", "astropy", "safetensors")},
         "cli_workflows": ["classification train/predict", "detection train/evaluate/predict"],
+        "bundle_workflows": bundle_reports,
         "data_kind": "synthetic pixels in real FITS files; not scientific validation",
     }))
 

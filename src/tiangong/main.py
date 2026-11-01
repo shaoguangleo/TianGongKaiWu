@@ -1,94 +1,172 @@
-"""命令入口：train训练，evaluate独立测试，predict单FITS分类。"""
+"""分类入口：train训练，evaluate冻结benchmark测试，predict单FITS分类。"""
+from __future__ import annotations
+
 import argparse
 import hashlib
 import json
-import random
+import math
 from pathlib import Path
+import random
+
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
-from .data import RadioDataset, read_manifest, read_image, preprocess
-from .model import MorphologyCNN
+
+from .classification_checkpoint import (
+    CHECKPOINT_SCHEMA_VERSION, PREPROCESS_VERSION, TASK_NAME, _positive_int,
+    _validate_checkpoint, _validate_classes, _validate_size, load_classification_checkpoint,
+)
+from .data import RadioDataset, preprocess, read_image, read_manifest
+from .detect import _preflight_output, _save_checkpoint_atomic, _validate_device, _write_json
 from .engine import run_epoch
+from .model import MorphologyCNN
 
 
-def main():
-    # 第1段：所有关键参数显式传入；默认CPU，便于无GPU机器学习和调试。
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('command',choices=['train','evaluate','predict'])
-    p.add_argument('--manifest'); p.add_argument('--image')
-    p.add_argument('--checkpoint',default='runs/best.pt')
-    p.add_argument('--output',default='runs')
-    p.add_argument('--classes',nargs='+',default=['compact','extended','multi_component'])
-    p.add_argument('--size',type=int,default=64)
-    p.add_argument('--epochs',type=int,default=10)
-    p.add_argument('--batch-size',type=int,default=16)
-    p.add_argument('--lr',type=float,default=0.001)
-    p.add_argument('--seed',type=int,default=42)
-    p.add_argument('--device',default='cpu')
-    args = p.parse_args()
-    random.seed(args.seed); np.random.seed(args.seed); torch.manual_seed(args.seed)
+def build_parser() -> argparse.ArgumentParser:
+    """保持已有参数名；旧checkpoint必须显式确认其真实预处理版本。"""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('command', choices=['train', 'evaluate', 'predict'])
+    parser.add_argument('--manifest')
+    parser.add_argument('--image')
+    parser.add_argument('--checkpoint', default='runs/best.pt')
+    parser.add_argument('--output', default='runs')
+    parser.add_argument('--classes', nargs='+', default=['compact', 'extended', 'multi_component'])
+    parser.add_argument('--size', type=int, default=64)
+    parser.add_argument('--epochs', type=int, default=10)
+    parser.add_argument('--batch-size', type=int, default=16)
+    parser.add_argument('--lr', type=float, default=.001)
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--device', default='cpu')
+    parser.add_argument('--legacy-preprocess-version', choices=[PREPROCESS_VERSION],
+                        help='仅在已确认旧权重使用此预处理时指定；不推断或改写旧metadata')
+    return parser
+
+
+def _execute(args: argparse.Namespace) -> None:
+    if args.command == 'predict' and not args.image:
+        raise ValueError('predict需要--image')
+    if args.command != 'predict' and not args.manifest:
+        raise ValueError('train/evaluate需要--manifest')
+    device = _validate_device(args.device)
+    if args.command != 'predict':
+        _positive_int(args.batch_size, 'batch-size')
     torch.set_num_threads(2)
-    out=Path(args.output); out.mkdir(parents=True,exist_ok=True)
-    device=torch.device(args.device)
-
-    # 第2段：评估/预测从checkpoint恢复类别顺序和输入尺寸，避免与训练错位。
-    if args.command != 'train':
-        state=torch.load(args.checkpoint,map_location='cpu',weights_only=True)
-        args.classes, args.size = state['classes'],state['size']
+    output = Path(args.output).resolve()
+    if args.command == 'train':
+        if args.legacy_preprocess_version is not None:
+            raise ValueError('train不接受legacy预处理声明；新训练始终使用当前schema')
+        _validate_classes(args.classes)
+        _validate_size(args.size)
+        _positive_int(args.epochs, 'epochs')
+        if not math.isfinite(args.lr) or args.lr <= 0:
+            raise ValueError('lr必须为正有限数')
+        if not 0 <= args.seed < 2**32:
+            raise ValueError('seed必须在[0,2**32)内')
+        _preflight_output(output, ('best.pt', 'config.json', 'history.json'), training=True)
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        classes, size = args.classes, args.size
     else:
-        if args.epochs < 1 or args.size < 8 or len(args.classes)<2:
-            p.error('epochs>=1，size>=8，类别数>=2')
-        if len(set(args.classes)) != len(args.classes): p.error('类别名重复')
-    model=MorphologyCNN(len(args.classes)).to(device)
-    if args.command != 'train': model.load_state_dict(state['model'])
+        state = load_classification_checkpoint(
+            args.checkpoint, allow_legacy=args.legacy_preprocess_version == PREPROCESS_VERSION,
+        )
+        classes, size = state['classes'], state['size']
+        names = ('prediction.json',) if args.command == 'predict' else ('test_metrics.json', 'test_predictions.json')
+        _preflight_output(output, names, Path(args.checkpoint))
 
-    # 第3段：单图预测复用完全相同的归一化；原FITS不被改写。
+    architecture = dict(name='MorphologyCNN', size=size)
+    model = MorphologyCNN(len(classes)).to(device)
+    if args.command != 'train':
+        model.load_state_dict(state['model'], strict=True)
+
+    # 单图预测无需manifest；旧文件仅记录调用者确认，不给旧checkpoint补造schema。
     if args.command == 'predict':
-        if not args.image: p.error('需要--image')
-        image=read_image(args.image)
-        if image.shape != (args.size,args.size): raise ValueError('输入尺寸与训练不一致')
+        image = read_image(args.image)
+        if image.shape != (size, size):
+            raise ValueError(f'输入需要{size}x{size}图像，实际为{image.shape}')
         model.eval()
         with torch.no_grad():
-            prob=model(torch.from_numpy(preprocess(image)).unsqueeze(0).to(device)).softmax(-1)[0]
-        result=dict(image=str(Path(args.image).resolve()),
-                    probabilities=dict(zip(args.classes,prob.cpu().tolist())),
-                    note='未校准的模型输出，不是科学可靠度')
-        (out/'prediction.json').write_text(json.dumps(result,ensure_ascii=False,indent=2))
-        print(json.dumps(result,ensure_ascii=False)); return
+            tensor = torch.from_numpy(preprocess(image)).unsqueeze(0).to(device)
+            probabilities = model(tensor).softmax(-1)[0].cpu().tolist()
+        result = dict(image=str(Path(args.image).resolve()),
+                      checkpoint=str(Path(args.checkpoint).resolve()),
+                      probabilities=dict(zip(classes, probabilities)),
+                      note='未校准的模型输出，不是科学可靠度')
+        if 'schema_version' in state:
+            result.update(schema_version=state['schema_version'],
+                          preprocess_version=state['preprocess_version'])
+        else:
+            result['legacy_preprocess_version_confirmation'] = args.legacy_preprocess_version
+        output.mkdir(parents=True, exist_ok=True)
+        _write_json(output / 'prediction.json', result)
+        print(json.dumps(result, ensure_ascii=False, allow_nan=False))
+        return
 
-    # 第4段：先检查整个清单，再选择分区；test只在evaluate命令中访问。
-    if not args.manifest: p.error('需要--manifest')
-    rows=read_manifest(args.manifest,len(args.classes))
-    def loader(split,shuffle=False):
-        subset=[r for r in rows if r['split']==split]
-        if not subset: raise ValueError(f'{split}分区为空')
-        return DataLoader(RadioDataset(subset,args.size),batch_size=args.batch_size,shuffle=shuffle)
+    # 启动时冻结清单；数据层验证实际解析的bytes。evaluate必须匹配训练时摘要。
+    digest = (state['manifest_sha256'] if args.command == 'evaluate'
+              else hashlib.sha256(Path(args.manifest).read_bytes()).hexdigest())
+    rows = read_manifest(args.manifest, len(classes), expected_sha256=digest)
+
+    def loader(split: str, shuffle: bool = False) -> DataLoader:
+        selected = [row for row in rows if row['split'] == split]
+        if not selected:
+            raise ValueError(f'{split}分区为空')
+        return DataLoader(RadioDataset(selected, size), batch_size=args.batch_size,
+                          shuffle=shuffle, num_workers=0)
+
     if args.command == 'evaluate':
-        metrics,records=run_epoch(model,loader('test'),device,len(args.classes))
-        metrics['classes']=args.classes
-        (out/'test_metrics.json').write_text(json.dumps(metrics,indent=2))
-        (out/'test_predictions.json').write_text(json.dumps(records,indent=2))
-        print(json.dumps(metrics)); return
+        metrics, records = run_epoch(model, loader('test'), device, len(classes))
+        metrics.update(classes=classes, split='test', manifest_sha256=digest,
+                       checkpoint=str(Path(args.checkpoint).resolve()))
+        if 'schema_version' in state:
+            metrics.update(schema_version=state['schema_version'],
+                           preprocess_version=state['preprocess_version'])
+        else:
+            metrics['legacy_preprocess_version_confirmation'] = args.legacy_preprocess_version
+        output.mkdir(parents=True, exist_ok=True)
+        _write_json(output / 'test_metrics.json', metrics)
+        _write_json(output / 'test_predictions.json', records)
+        print(json.dumps(metrics, ensure_ascii=False, allow_nan=False))
+        return
 
-    # 第5段：仅按验证集macro-F1选优，test绝不参与训练或模型选择。
-    train_loader,val_loader=loader('train',True),loader('val')
-    optimizer=torch.optim.AdamW(model.parameters(),lr=args.lr)
-    best=-1.; history=[]
-    for epoch in range(args.epochs):
-        tr,_=run_epoch(model,train_loader,device,len(args.classes),optimizer)
-        va,_=run_epoch(model,val_loader,device,len(args.classes))
-        row=dict(epoch=epoch+1,train=tr,val=va); history.append(row)
-        print(f"epoch={epoch+1} train_loss={tr['loss']:.4f} val_macro_f1={va['macro_f1']:.4f}")
-        if va['macro_f1'] > best:
-            best=va['macro_f1']
-            # 第6段：保存结构参数、随机种子和清单摘要，便于追溯；仅加载可信文件。
-            torch.save(dict(model=model.state_dict(),classes=args.classes,size=args.size,
-                            seed=args.seed,epoch=epoch+1,
-                            manifest_sha256=hashlib.sha256(Path(args.manifest).read_bytes()).hexdigest()),
-                       out/'best.pt')
-    (out/'history.json').write_text(json.dumps(history,indent=2))
-    (out/'config.json').write_text(json.dumps(vars(args),indent=2))
+    # test不参与训练或选优；选优目标仍为验证集macro-F1。
+    train_loader, val_loader = loader('train', True), loader('val')
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    output.mkdir(parents=True, exist_ok=True)
+    _write_json(output / 'config.json', {**vars(args), 'architecture': architecture,
+                'schema_version': CHECKPOINT_SCHEMA_VERSION, 'task': TASK_NAME,
+                'preprocess_version': PREPROCESS_VERSION, 'manifest_sha256': digest,
+                'selection_metric': 'val_macro_f1'})
+    best, history = -math.inf, []
+    for epoch in range(1, args.epochs + 1):
+        train_metrics, _ = run_epoch(model, train_loader, device, len(classes), optimizer)
+        val_metrics, _ = run_epoch(model, val_loader, device, len(classes))
+        history.append(dict(epoch=epoch, train=train_metrics, val=val_metrics))
+        print(f"epoch={epoch} train_loss={train_metrics['loss']:.4f} val_macro_f1={val_metrics['macro_f1']:.4f}")
+        score = val_metrics['macro_f1']
+        if not math.isfinite(score):
+            raise ValueError('验证集macro-F1必须为有限值')
+        if score > best:
+            checkpoint = dict(schema_version=CHECKPOINT_SCHEMA_VERSION, task=TASK_NAME,
+                              preprocess_version=PREPROCESS_VERSION, classes=classes,
+                              architecture=architecture, size=size, seed=args.seed, epoch=epoch,
+                              manifest_sha256=digest,
+                              model={key: value.detach().cpu() for key, value in model.state_dict().items()})
+            _validate_checkpoint(checkpoint)
+            _save_checkpoint_atomic(checkpoint, output / 'best.pt',
+                                    replace_existing=math.isfinite(best))
+            best = score
+    _write_json(output / 'history.json', history)
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        _execute(args)
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError) as error:
+        parser.error(str(error))
 
 
 if __name__ == '__main__':

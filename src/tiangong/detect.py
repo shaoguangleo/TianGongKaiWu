@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import math
 import os
@@ -81,10 +82,11 @@ def _validate_architecture(architecture: Any) -> dict[str, Any]:
     return architecture
 
 
-def load_detection_checkpoint(path: str | Path) -> dict[str, Any]:
+def load_detection_checkpoint(path: str | Path | io.BytesIO) -> dict[str, Any]:
     """weights_only恢复并检查格式、预处理版本和结构；不回退到不安全加载。"""
     try:
-        state = torch.load(Path(path), map_location='cpu', weights_only=True)
+        source = path if isinstance(path, io.BytesIO) else Path(path)
+        state = torch.load(source, map_location='cpu', weights_only=True)
         if (not isinstance(state, dict) or type(state.get('schema_version')) is not int
                 or state['schema_version'] != CHECKPOINT_SCHEMA_VERSION):
             raise ValueError('schema_version不兼容')

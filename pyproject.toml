@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tiangongkaiwu"
-version = "0.1.0.dev1"
+version = "0.1.0.dev2"
 description = "Engineering baselines for radio-source morphology and component detection"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -14,6 +14,7 @@ dependencies = [
     "torch>=2.2,<3",
     "scipy>=1.10,<2",
     "safetensors>=0.8,<1",
+    "Pillow>=12,<13",
 ]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
@@ -31,6 +32,7 @@ tiangong-detect = "tiangong.detect:main"
 tiangong-demo = "tiangong.demo:main"
 tiangong-demo-detection = "tiangong.demo_detection:main"
 tiangong-bundle = "tiangong.bundle:main"
+tiangong-source-data = "tiangong.source_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

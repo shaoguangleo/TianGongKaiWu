@@ -1,4 +1,4 @@
-"""由安装测试复制到仓库外执行；只使用安装产物与真实 FITS 格式的模拟样本。"""
+"""由安装测试复制到仓库外执行；使用安装产物与模拟 FITS、PNG/COCO。"""
 import hashlib
 import importlib.metadata
 import json
@@ -14,6 +14,8 @@ import numpy as np
 import scipy
 import safetensors
 import torch
+import PIL
+from PIL import Image
 
 import tiangong
 from tiangong.data import preprocess, read_image
@@ -22,6 +24,7 @@ from tiangong.detection_model import TinySetDetector
 from tiangong.bundle import load_bundle
 from tiangong.classification_checkpoint import load_classification_checkpoint
 from tiangong.detect import load_detection_checkpoint
+from tiangong.source_data import SourceDataset
 
 
 def run_cli(name, *arguments):
@@ -36,7 +39,7 @@ def run_cli(name, *arguments):
 def main():
     assert sys.prefix != sys.base_prefix
     prefix = Path(sys.prefix).resolve()
-    for module in (tiangong, torch, np, scipy, astropy, safetensors):
+    for module in (tiangong, torch, np, scipy, astropy, safetensors, PIL):
         assert Path(module.__file__).resolve().is_relative_to(prefix), module.__file__
     torch.set_num_threads(2)
     torch.manual_seed(7)
@@ -117,6 +120,32 @@ def main():
         bundle_reports[name] = {"task": task, "classes": list(bundle.classes),
                                 "sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
                                 "checkpoint_manifest_required": False, "prediction_exact": True}
+    # 新源级流程从安装入口生成清单，迁移图片目录后按显式root读取。
+    png_root = Path('source-png')
+    png_root.mkdir()
+    coco = {'images': [], 'annotations': [], 'categories': [
+        {'id': i, 'name': name} for i, name in enumerate(('CJ','CS','FRI','FRII'))]}
+    for i in range(3):
+        Image.new('RGBA', (6, 4), (i*50, 20, 30, 255)).save(png_root/f'{i}.png')
+        coco['images'].append({'id':i,'file_name':f'{i}.png','width':6,'height':4})
+        coco['annotations'].append({'id':i,'image_id':i,'category_id':i,
+                                    'bbox':[1,1,2,2],'area':4,'segmentation':[], 'iscrowd':0})
+    Path('source-coco.json').write_text(json.dumps(coco),encoding='utf-8')
+    run_cli('tiangong-source-data','prepare','--coco','source-coco.json',
+            '--image-root',png_root,'--output','source-manifest.json')
+    run_cli('tiangong-source-data','inspect','--manifest','source-manifest.json')
+    Path('source-groups.json').write_text(json.dumps([
+        {'sample_id':f'image-{i}','group_id':f'synthetic-sky-{i}','split':split}
+        for i,split in enumerate(('train','val','test'))]),encoding='utf-8')
+    run_cli('tiangong-source-data','split','--manifest','source-manifest.json',
+            '--assignments','source-groups.json','--grouping-provenance','synthetic installation fixture',
+            '--output','source-split.json')
+    png_root.rename('relocated-png')
+    source_dataset = SourceDataset('source-split.json','relocated-png',split='train')
+    source_image, source_target, source_id = source_dataset[0]
+    assert list(source_image.shape)==[3,4,6]
+    assert source_target['labels'].tolist()==[0] and source_id=='image-0'
+    torch.testing.assert_close(source_target['pixel_boxes'],torch.tensor([[1.,1.,3.,3.]]))
     print(json.dumps({
         "python": platform.python_version(), "platform": platform.platform(),
         "machine": platform.machine(), "prefix": sys.prefix,
@@ -124,9 +153,11 @@ def main():
         "classification_shape": list(classes.shape),
         "detection_shape": list(detection["boxes"].shape),
         "versions": {name: importlib.metadata.version(name) for name in
-                     ("tiangongkaiwu", "torch", "numpy", "scipy", "astropy", "safetensors")},
+                     ("tiangongkaiwu", "torch", "numpy", "scipy", "astropy", "safetensors", "Pillow")},
         "cli_workflows": ["classification train/predict", "detection train/evaluate/predict"],
         "bundle_workflows": bundle_reports,
+        "source_data_workflow": {"shape":list(source_image.shape),"category_zero_preserved":True,
+                                 "relocated_root":True,"assigned_splits":["train","val","test"]},
         "data_kind": "synthetic pixels in real FITS files; not scientific validation",
     }))
 

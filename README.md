@@ -24,7 +24,9 @@ python -m pytest -q
 
 安装后可在仓库外使用 `tiangong-classify`、`tiangong-detect`、`tiangong-demo` 和 `tiangong-demo-detection`，其参数与对应旧脚本一致。构建和从 wheel/sdist 安装的命令见 [安装说明](docs/installation.md)。
 
-步骤03新增 `tiangong-bundle`：分类与检测权重可以迁移为绑定架构、类别、预处理和来源的统一 `.tgb`。使用方法见 [模型包说明](docs/bundle.md)，TDD及安装验证见 [本步验证](docs/bundle-verification.md)。已核对 [HeTu输入与标注差异](docs/hetu-reference.md)；用户提供的约5000张标注图尚待定位和格式审计。
+步骤03新增 `tiangong-bundle`：分类与检测权重可以迁移为绑定架构、类别、预处理和来源的统一 `.tgb`。使用方法见 [模型包说明](docs/bundle.md)，TDD及安装验证见 [本步验证](docs/bundle-verification.md)。已核对 [HeTu输入与标注差异](docs/hetu-reference.md)。
+
+当前开发版 `0.1.0.dev2` 新增 `tiangong-source-data`：导入完整射电源PNG/COCO、保留原ID及摘要、合并完全一致的重复记录、隔离问题图、核验显式分组划分，并提供可搬迁图片根目录的三通道Dataset。用法及Rocky/Python3.12/V100服务器验收命令见 [源级数据接入](docs/source-data.md)。真实RACS-mid候选已定位，但科学分组/独立测试与源级模型训练仍未完成；原FITS模型不能直接接收PNG。
 
 代码接受 `--device cuda`，但 CUDA 尚未完成实际平台验证。默认 CPU，训练不下载权重。依赖范围不是跨平台锁文件；早期分类记录保留在 `VERIFICATION.md`，本轮包验证单独记录。
 生成器对已有manifest拒绝覆盖。不要使用相同output目录混合不同真实实验；每次运行用新目录。

@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel>=0.43"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tiangongkaiwu"
+version = "0.1.0.dev0"
+description = "Engineering baselines for radio-source morphology and component detection"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "numpy>=1.24,<2",
+    "astropy>=6,<9",
+    "torch>=2.2,<3",
+    "scipy>=1.10,<2",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Astronomy",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "build>=1.2,<2", "setuptools>=68", "wheel>=0.43"]
+
+[project.scripts]
+tiangong-classify = "tiangong.main:main"
+tiangong-detect = "tiangong.detect:main"
+tiangong-demo = "tiangong.demo:main"
+tiangong-demo-detection = "tiangong.demo_detection:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["tiangong", "tiangong.*"]
+namespaces = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

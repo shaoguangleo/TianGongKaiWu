@@ -1,5 +1,3 @@
-numpy>=1.24,<3
-astropy>=6,<9
-torch>=2.2,<3
-pytest>=8,<10
-scipy>=1.10,<2
+# 旧开发安装入口：请在仓库根目录运行 pip install -r requirements.txt。
+# 运行依赖及开发 extra 统一由 pyproject.toml 维护。
+-e .[dev]

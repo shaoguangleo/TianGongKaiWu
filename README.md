@@ -1,18 +1,18 @@
-# RACS-mid 形态专模：首期教学代码 v0.1
+# TianGongKaiWu：射电分类与分量检测工程包
 
-这是自定义CNN的完整分类基线。代码内每个逻辑段均有中文说明，配合本文件阅读。
+这是自定义 CNN 分类与最小集合检测的工程基线，本地发行名 `tiangongkaiwu`，Python 导入名 `tiangong`。实现统一位于 `src/tiangong/`；根目录同名脚本保留为安装后的兼容入口。尚未发布到 PyPI，也不包含经过真实科学验收的权重。
 范围：已裁剪、完整源、固定尺寸的FITS分类。没有实现DINO、AION、大图检测、物理分量关联、FR分类或自动空间划分。
 
 下一阶段已新增独立的最小分量检测器入口 `detect.py`，支持可变数量标注框、Hungarian 匹配、框回归及训练/评估/预测；分类入口保持独立。安装、标注协议、运行命令和边界见 [分量检测器说明](docs/detection.md)，实施与验证见 [检测方案](docs/detection-plan.md) 和 [本次检测验证](docs/detection-verification.md)。
 
 ## 1. 安装与快速运行
 
-建议Python 3.11。先新建虚拟环境；根据机器和驱动，从PyTorch官方选择CPU或CUDA安装方式，然后安装其余依赖。
+先使用 Python 3.10—3.12 新建虚拟环境，在仓库根目录安装；实际验证的平台和版本以 [安装说明](docs/installation.md) 与 [打包验证](docs/package-verification.md) 为准。模型默认使用 CPU。
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt
+python -m pip install -e ".[dev]"
 python demo.py --output demo_data --per-class 40
 python main.py train --manifest demo_data/manifest.csv --epochs 12 --output runs
 python main.py evaluate --manifest demo_data/manifest.csv --checkpoint runs/best.pt --output runs
@@ -20,7 +20,9 @@ python main.py predict --image demo_data/test_0_0.fits --checkpoint runs/best.pt
 python -m pytest -q
 ```
 
-GPU训练在命令末尾加 `--device cuda`。默认CPU，训练不需要下载权重。依赖范围不是跨平台锁文件；本次实际环境见 `VERIFICATION.md`。
+安装后可在仓库外使用 `tiangong-classify`、`tiangong-detect`、`tiangong-demo` 和 `tiangong-demo-detection`，其参数与对应旧脚本一致。构建和从 wheel/sdist 安装的命令见 [安装说明](docs/installation.md)。
+
+代码接受 `--device cuda`，但 CUDA 尚未完成实际平台验证。默认 CPU，训练不下载权重。依赖范围不是跨平台锁文件；早期分类记录保留在 `VERIFICATION.md`，本轮包验证单独记录。
 生成器对已有manifest拒绝覆盖。不要使用相同output目录混合不同真实实验；每次运行用新目录。
 
 ## 2. 按数据流理解每一段代码
